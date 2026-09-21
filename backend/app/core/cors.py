@@ -211,13 +211,16 @@ async def listen_for_cors_updates(app: FastAPI):
         pubsub.subscribe("cors:update")
         logger.info("Started CORS update listener")
 
-        # Apply any existing CORS config on startup
+        # Apply any existing CORS config on startup, unioned with the freshly
+        # computed origins. The cached snapshot can predate a CORS_ORIGINS env
+        # change, and env-configured origins must survive a cache refresh.
         try:
             cached = redis_client.get("cors:origins")
             if cached:
                 cached_data = json.loads(cached)
                 if isinstance(cached_data, dict) and "origins" in cached_data:
-                    update_local_cors(app, cached_data["origins"])
+                    merged = set(cached_data["origins"]) | get_cors_origins()
+                    update_local_cors(app, list(merged))
         except Exception:
             # Best-effort; continue
             pass
@@ -234,7 +237,8 @@ async def listen_for_cors_updates(app: FastAPI):
                             origins_data = json.loads(origins_data)
                             if origins_data and "origins" in origins_data:
                                 logger.info("Received CORS update notification")
-                                update_local_cors(app, origins_data["origins"])
+                                merged = set(origins_data["origins"]) | set(BASE_CORS_ORIGINS)
+                                update_local_cors(app, list(merged))
                     except Exception as inner_e:
                         logger.error(f"Error processing CORS update: {str(inner_e)}")
                 # Yield control to the event loop and poll at a light cadence
